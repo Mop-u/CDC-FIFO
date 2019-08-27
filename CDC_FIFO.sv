@@ -90,24 +90,31 @@ wire [FifoDepth-1:0] SharedDataValid = (DataPush_DA        ^ DataAck_DB)
 /*
  * A-Domain fifo update flags
  * 
- * PopObserved_DA checks if the A-Domain tail is pointing to an entry
+ * DeqObserved_DA checks if the A-Domain tail is pointing to an entry
  * that has been already acknowledged by the B-Domain.
  * 
- * The FifoFull_DA flag can deassert when full if a pop has been observed.
+ * The FifoFull_DA flag can deassert when full if a deq has been observed.
  * This is important as otherwise the lazy updating would cause poor performance
  * when the fifo believes it's still full.
  */
-wire PopObserved_DA = |FifoSize_DA & !SharedDataValid[FifoTailNext_DA];
-assign FifoFull_DA = (FifoSize_DA == FifoDepth) & !PopObserved_DA;
+wire DeqObserved_DA = |FifoSize_DA & !SharedDataValid[FifoTailNext_DA];
+assign FifoFull_DA = (FifoSize_DA == FifoDepth) & !DeqObserved_DA;
 wire PushEnable_DA = (Push_DA & !FifoFull_DA);
 
+/*
+ * B-Domain data ready flag
+ * 
+ * Only the most recent & the second most recent flags need to be checked.
+ * Most recent needs to be checked to ensure the second phase of the write has cleared.
+ * Second most recent needs to be checked to see if there are older stable values to read.
+ */
 wire DataReady_DB = SharedDataValid[FifoHead_DA]|SharedDataValid[FifoHeadOld_DA];
 
 /*
  * A-Domain fifo state lazy update block
  * 
  * Instead of mirroring the tail of the B-Domain pointer directly,
- * the A-Domain fifo tail & size are lazily updated when a pop
+ * the A-Domain fifo tail & size are lazily updated when a deq
  * has been observed.
  */
 always_ff @(posedge clk_DA, posedge rst) begin
@@ -116,8 +123,8 @@ always_ff @(posedge clk_DA, posedge rst) begin
         FifoTail_DA <= '0;
     end
     else begin
-        FifoSize_DA <= FifoSize_DA + PushEnable_DA - PopObserved_DA;
-        if(PopObserved_DA) FifoTail_DA <= FifoTailNext_DA;
+        FifoSize_DA <= FifoSize_DA + PushEnable_DA - DeqObserved_DA;
+        if(DeqObserved_DA) FifoTail_DA <= FifoTailNext_DA;
     end
 end
 
