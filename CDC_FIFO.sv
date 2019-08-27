@@ -54,17 +54,14 @@ module CDC_FIFO #(
 // Fifo parameterization with safe clog2 if the fifo is single entry
 localparam AddressWidth = (FifoDepth == 1) ? 1 : $clog2(FifoDepth);
 reg  [DataWidth-1:0] SharedFifo [0:FifoDepth-1];
-reg  [$clog2(FifoDepth+1)-1:0] FifoSize_DA;
 
 // Fifo pointers
 reg  [AddressWidth-1:0] FifoHead_DA;
 reg  [AddressWidth-1:0] FifoHeadOld_DA;
-reg  [AddressWidth-1:0] FifoTail_DA;
 reg  [AddressWidth-1:0] FifoTail_DB;
 
 // Wraparound increment logic to support addressing arbitrary fifo depths
 wire [AddressWidth-1:0] FifoHeadNext_DA = (FifoHead_DA == FifoDepth-1) ? '0 : (FifoHead_DA + 1);
-wire [AddressWidth-1:0] FifoTailNext_DA = (FifoTail_DA == FifoDepth-1) ? '0 : (FifoTail_DA + 1);
 wire [AddressWidth-1:0] FifoTailNext_DB = (FifoTail_DB == FifoDepth-1) ? '0 : (FifoTail_DB + 1);
 
 /*
@@ -84,21 +81,16 @@ wire [AddressWidth-1:0] FifoTailNext_DB = (FifoTail_DB == FifoDepth-1) ? '0 : (F
 reg  [FifoDepth-1:0] DataPush_DA;
 reg  [FifoDepth-1:0] DataPushConfirm_DA;
 reg  [FifoDepth-1:0] DataAck_DB;
-wire [FifoDepth-1:0] SharedDataValid = (DataPush_DA        ^ DataAck_DB)
-                                      &(DataPushConfirm_DA ^ DataAck_DB);
+wire [FifoDepth-1:0] SharedDataValid = (DataPushConfirm_DA ^ DataAck_DB);
 
 /*
  * A-Domain fifo update flags
  * 
- * DeqObserved_DA checks if the A-Domain tail is pointing to an entry
- * that has been already acknowledged by the B-Domain.
- * 
- * The FifoFull_DA flag can deassert when full if a deq has been observed.
- * This is important as otherwise the lazy updating would cause poor performance
- * when the fifo believes it's still full.
+ * The FifoFull_DA flag only cares if the next fifo write address is occupied.
+ * A-Domain tail & size information is redundant & not needed as an overrun
+ * can be inferred from the SharedDataValid flag vector.
  */
-wire DeqObserved_DA = |FifoSize_DA & !SharedDataValid[FifoTailNext_DA];
-assign FifoFull_DA = (FifoSize_DA == FifoDepth) & !DeqObserved_DA;
+assign FifoFull_DA = SharedDataValid[FifoHeadNext_DA];
 wire PushEnable_DA = (Push_DA & !FifoFull_DA);
 
 /*
@@ -109,24 +101,6 @@ wire PushEnable_DA = (Push_DA & !FifoFull_DA);
  * Second most recent needs to be checked to see if there are older stable values to read.
  */
 wire DataReady_DB = SharedDataValid[FifoHead_DA]|SharedDataValid[FifoHeadOld_DA];
-
-/*
- * A-Domain fifo state lazy update block
- * 
- * Instead of mirroring the tail of the B-Domain pointer directly,
- * the A-Domain fifo tail & size are lazily updated when a deq
- * has been observed.
- */
-always_ff @(posedge clk_DA, posedge rst) begin
-    if(rst) begin
-        FifoSize_DA <= '0;
-        FifoTail_DA <= '0;
-    end
-    else begin
-        FifoSize_DA <= FifoSize_DA + PushEnable_DA - DeqObserved_DA;
-        if(DeqObserved_DA) FifoTail_DA <= FifoTailNext_DA;
-    end
-end
 
 // A-Domain fifo push phase 1
 always_ff @(posedge clk_DA, posedge rst) begin
