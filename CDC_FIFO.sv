@@ -57,7 +57,6 @@ reg  [DataWidth-1:0] SharedFifo [0:FifoDepth-1];
 
 // Fifo pointers
 reg  [AddressWidth-1:0] FifoHead_DA;
-reg  [AddressWidth-1:0] FifoHeadOld_DA;
 reg  [AddressWidth-1:0] FifoTail_DB;
 
 // Wraparound increment logic to support addressing arbitrary fifo depths
@@ -90,29 +89,21 @@ wire [FifoDepth-1:0] SharedDataValid = (DataPushConfirm_DA ^ DataAck_DB);
  * A-Domain tail & size information is redundant & not needed as an overrun
  * can be inferred from the SharedDataValid flag vector.
  */
-assign FifoFull_DA = SharedDataValid[FifoHeadNext_DA];
+assign FifoFull_DA = SharedDataValid[FifoHead_DA];
 wire PushEnable_DA = (Push_DA & !FifoFull_DA);
 
-/*
- * B-Domain data ready flag
- * 
- * Only the most recent & the second most recent flags need to be checked.
- * Most recent needs to be checked to ensure the second phase of the write has cleared.
- * Second most recent needs to be checked to see if there are older stable values to read.
- */
-wire DataReady_DB = SharedDataValid[FifoHead_DA]|SharedDataValid[FifoHeadOld_DA];
+// B-Domain data ready flag
+wire DataReady_DB = SharedDataValid[FifoTail_DB];
 
 // A-Domain fifo push phase 1
 always_ff @(posedge clk_DA, posedge rst) begin
     if(rst) begin
         DataPush_DA <= '0;
         FifoHead_DA <= '0;
-        FifoHeadOld_DA <= '0;
     end
     else if(PushEnable_DA) begin
-        SharedFifo[FifoHeadNext_DA] <= DataIn_DA;
-        DataPush_DA[FifoHeadNext_DA] <= ~DataPush_DA[FifoHeadNext_DA];
-        FifoHeadOld_DA <= FifoHead_DA;
+        SharedFifo[FifoHead_DA] <= DataIn_DA;
+        DataPush_DA[FifoHead_DA] <= ~DataPush_DA[FifoHead_DA];
         FifoHead_DA <= FifoHeadNext_DA;
     end
 end
@@ -136,8 +127,8 @@ always_ff @(posedge clk_DB, posedge rst) begin
         DataOut_DB <= '0;
     end
     else if(DataReady_DB & (!DataValid_DB|Deq_DB)) begin
-        DataOut_DB  <= SharedFifo[FifoTailNext_DB];
-        DataAck_DB[FifoTailNext_DB] <= ~DataAck_DB[FifoTailNext_DB];
+        DataOut_DB  <= SharedFifo[FifoTail_DB];
+        DataAck_DB[FifoTail_DB] <= ~DataAck_DB[FifoTail_DB];
         FifoTail_DB <= FifoTailNext_DB;
         DataValid_DB <= 1'b1;
     end
