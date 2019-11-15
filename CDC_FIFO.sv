@@ -92,8 +92,17 @@ wire [FifoDepth-1:0] SharedDataValid = (DataPushConfirm_DA ^ DataAck_DB);
 assign FifoFull_DA = SharedDataValid[FifoHead_DA];
 wire PushEnable_DA = (Push_DA & !FifoFull_DA);
 
-// B-Domain data ready flag
-wire DataReady_DB = SharedDataValid[FifoTail_DB];
+// B-Domain data ready flag synchronizer
+wire DataReadyUnsafe_DB = SharedDataValid[FifoTail_DB];
+reg  DataReady_DB;
+always_ff @(negedge clk_DB, posedge rst) begin
+    if(rst) begin
+        DataReady_DB <= 0;
+    end
+    else begin
+        DataReady_DB <= DataReadyUnsafe_DB;
+    end
+end
 
 // A-Domain fifo push phase 1
 always_ff @(posedge clk_DA, posedge rst) begin
@@ -132,7 +141,7 @@ always_ff @(posedge clk_DB, posedge rst) begin
         FifoTail_DB <= FifoTailNext_DB;
         DataValid_DB <= 1'b1;
     end
-    else if(Deq_DB) begin
+    else if(~DataReady_DB & Deq_DB) begin
         DataValid_DB <= 1'b0;
     end
 end
