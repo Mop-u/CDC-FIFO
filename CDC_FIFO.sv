@@ -41,7 +41,7 @@ module CDC_FIFO #(
     input                      clk_DA,       // Source clock domain A
     input                      Push_DA,      // Push new value to FIFO from A-Domain
     input      [DataWidth-1:0] DataIn_DA,    // A-Domain data input to the FIFO
-    output                     FifoFull_DA,  // High when the FIFO won't accept new values.
+    output reg                 FifoFull_DA,  // High when the FIFO won't accept new values.
     
     input                      rst,          // reset
     
@@ -89,18 +89,24 @@ wire [FifoDepth-1:0] SharedDataValid = (DataPushConfirm_DA ^ DataAck_DB);
  * A-Domain tail & size information is redundant & not needed as an overrun
  * can be inferred from the SharedDataValid flag vector.
  */
-assign FifoFull_DA = SharedDataValid[FifoHead_DA];
 wire PushEnable_DA = (Push_DA & !FifoFull_DA);
+always_ff @(negedge clk_DA, posedge rst) begin
+    if(rst) begin
+        FifoFull_DA <= '0;
+    end
+    else begin
+        FifoFull_DA <= SharedDataValid[FifoHead_DA];
+    end
+end
 
 // B-Domain data ready flag synchronizer
-wire DataReadyUnsafe_DB = SharedDataValid[FifoTail_DB];
 reg  DataReady_DB;
 always_ff @(negedge clk_DB, posedge rst) begin
     if(rst) begin
         DataReady_DB <= 0;
     end
     else begin
-        DataReady_DB <= DataReadyUnsafe_DB;
+        DataReady_DB <= SharedDataValid[FifoTail_DB];
     end
 end
 
