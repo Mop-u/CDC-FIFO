@@ -26,9 +26,6 @@
 /*
  * Module `CDC_FIFO`
  * 
- * This module guarantees a hold time of at least 1/2 a source clock domain cycle
- * before the receiver domain is allowed to latch the data.
- * 
  * The receiver will always peek at the first available valid data word. 
  * 
  * '_DA' corresponds to signals valid for usage in the data source clock domain A
@@ -36,7 +33,7 @@
  */
 module CDC_FIFO #(
     parameter DataWidth = 32,
-    parameter FifoDepth = 1
+    parameter FifoDepth = 4  // should not be lower than 4
 )(
     input                      clk_DA,       // Source clock domain A
     input                      Push_DA,      // Push new value to FIFO from A-Domain
@@ -51,66 +48,58 @@ module CDC_FIFO #(
     output reg [DataWidth-1:0] DataOut_DB    // B-Domain synchronized peek of the FIFO output
 );
 
-// Fifo parameterization with safe clog2 if the fifo is single entry
-localparam AddressWidth = (FifoDepth == 1) ? 1 : $clog2(FifoDepth);
-reg  [DataWidth-1:0] SharedFifo [0:FifoDepth-1];
+localparam Depth = (FifoDepth < 4) ? 4 : FifoDepth;
+
+localparam AddressWidth = $clog2(Depth);
+reg  [DataWidth-1:0] SharedFifo [0:Depth-1];
 
 // Fifo pointers
 reg  [AddressWidth-1:0] FifoHead_DA;
 reg  [AddressWidth-1:0] FifoTail_DB;
 
 // Wraparound increment logic to support addressing arbitrary fifo depths
-wire [AddressWidth-1:0] FifoHeadNext_DA = (FifoHead_DA == FifoDepth-1) ? '0 : (FifoHead_DA + 1);
-wire [AddressWidth-1:0] FifoTailNext_DB = (FifoTail_DB == FifoDepth-1) ? '0 : (FifoTail_DB + 1);
+wire [AddressWidth-1:0] FifoHeadNext_DA = (FifoHead_DA == Depth-1) ? '0 : (FifoHead_DA + 1);
+wire [AddressWidth-1:0] FifoTailNext_DB = (FifoTail_DB == Depth-1) ? '0 : (FifoTail_DB + 1);
 
 /*
  * Async handshake logic
  * 
- * The push & push confirm regs are for two-phase writing to the fifo
- * to ensure a minimum hold timing of 1/2 an A-Domain clock cycle. This
- * resolves race conditions where the valid data flag is read before the
- * data itself can propogate to the B-Domain buffer.
- * 
  * The ack regs reset their respective valid signal.
  * 
  * The final flags are derived from the XOR-ing of the respective domain flags,
- * which are updated as toggle flip-flops. This is a relatively cheap way to 
- * unify the states accross domains.
+ * then the entire vector is stored to a respective domain register.
+ * Before any flags are used, relevant bits are sync'd with at least one further register.
  */ 
-reg  [FifoDepth-1:0] DataPush_DA;
-reg  [FifoDepth-1:0] DataPushConfirm_DA;
-reg  [FifoDepth-1:0] DataAck_DB;
-wire [FifoDepth-1:0] SharedDataValid = (DataPushConfirm_DA ^ DataAck_DB);
+reg  [Depth-1:0] DataPush_DA;
+reg  [Depth-1:0] DataAck_DB;
+wire [Depth-1:0] SharedDataValid = (DataPush_DA ^ DataAck_DB);
+reg  [Depth-1:0] SharedDataValid_DA;
+reg  [Depth-1:0] SharedDataValid_DB;
 
-/*
- * A-Domain fifo update flags
- * 
- * The FifoFull_DA flag only cares if the next fifo write address is occupied.
- * A-Domain tail & size information is redundant & not needed as an overrun
- * can be inferred from the SharedDataValid flag vector.
- */
-wire PushEnable_DA = (Push_DA & !FifoFull_DA);
-always_ff @(negedge clk_DA, posedge rst) begin
-    if(rst) begin
-        FifoFull_DA <= '0;
-    end
-    else begin
-        FifoFull_DA <= SharedDataValid[FifoHead_DA];
-    end
+// A-Domain flag vector synchronizer
+always_ff @(posedge clk_DA, posedge rst) begin
+    if(rst) SharedDataValid_DA <= '0;
+    else    SharedDataValid_DA <= SharedDataValid;
 end
-
+// B-Domain flag vector synchronizer
+always_ff @(posedge clk_DB, posedge rst) begin
+    if(rst) SharedDataValid_DB <= '0;
+    else    SharedDataValid_DB <= SharedDataValid;
+end
+// A-Domain fifo full flag synchronizer
+wire PushEnable_DA = (Push_DA & !FifoFull_DA);
+always_ff @(posedge clk_DA, posedge rst) begin
+    if(rst) FifoFull_DA <= '0;
+    else    FifoFull_DA <= SharedDataValid_DA[FifoHeadNext_DA];
+end
 // B-Domain data ready flag synchronizer
 reg  DataReady_DB;
-always_ff @(negedge clk_DB, posedge rst) begin
-    if(rst) begin
-        DataReady_DB <= 0;
-    end
-    else begin
-        DataReady_DB <= SharedDataValid[FifoTail_DB];
-    end
+always_ff @(posedge clk_DB, posedge rst) begin
+    if(rst) DataReady_DB <= 0;
+    else    DataReady_DB <= SharedDataValid_DB[FifoTailNext_DB];
 end
 
-// A-Domain fifo push phase 1
+// A-Domain fifo push
 always_ff @(posedge clk_DA, posedge rst) begin
     if(rst) begin
         DataPush_DA <= '0;
@@ -123,17 +112,7 @@ always_ff @(posedge clk_DA, posedge rst) begin
     end
 end
 
-// A-Domain fifo push phase 2
-always_ff @(negedge clk_DA, posedge rst) begin
-    if(rst) begin
-        DataPushConfirm_DA <= '0;
-    end
-    else begin
-        DataPushConfirm_DA <= DataPush_DA;
-    end
-end
-
-// B-Domain fifo dequeue block
+// B-Domain fifo dequeue
 always_ff @(posedge clk_DB, posedge rst) begin
     if(rst) begin
         DataAck_DB <= '0;
